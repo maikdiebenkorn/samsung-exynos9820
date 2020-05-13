@@ -241,10 +241,33 @@ static int s3c2410wdt_mask_and_disable_reset(struct s3c2410_wdt *wdt, bool mask)
 static int s3c2410wdt_keepalive(struct watchdog_device *wdd)
 {
 	struct s3c2410_wdt *wdt = watchdog_get_drvdata(wdd);
+	unsigned long flags, wtcnt = 0;
 
-	spin_lock(&wdt->lock);
+	s3c2410wdt_multistage_wdt_keepalive();
+
+	spin_lock_irqsave(&wdt->lock, flags);
 	writel(wdt->count, wdt->reg_base + S3C2410_WTCNT);
-	spin_unlock(&wdt->lock);
+	spin_unlock_irqrestore(&wdt->lock, flags);
+
+	wtcnt = readl(wdt->reg_base + S3C2410_WTCNT);
+	dev_info(wdt->dev, "Watchdog cluster %u keepalive!, wtcnt = %lx\n", wdt->cluster, wtcnt);
+
+#ifdef SEC_WATCHDOGD_FOOTPRINT
+	if (wdt->cluster == 0) {
+		time64_t sec;
+
+		wdd_info->last_ping_cpu = raw_smp_processor_id();
+		wdd_info->last_ping_time = sched_clock();
+
+		sec = ktime_get_real_seconds();
+		rtc_time_to_tm(sec, wdd_info->tm);
+		pr_info("Watchdog: %s RTC %d-%02d-%02d %02d:%02d:%02d UTC\n",
+				__func__,
+				wdd_info->tm->tm_year + 1900, wdd_info->tm->tm_mon + 1,
+				wdd_info->tm->tm_mday, wdd_info->tm->tm_hour,
+				wdd_info->tm->tm_min, wdd_info->tm->tm_sec);
+	}
+#endif
 
 	return 0;
 }

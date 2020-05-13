@@ -673,9 +673,14 @@ static int s3c64xx_spi_transfer_one(struct spi_master *master,
 
 	spin_lock_irqsave(&sdd->lock, flags);
 
-	/* Pending only which is to be done */
-	sdd->state &= ~RXBUSY;
-	sdd->state &= ~TXBUSY;
+			xfer->tx_buf = origin_tx_buf;
+			xfer->rx_buf = origin_rx_buf;
+			xfer->len = origin_len;
+		} else {
+
+			s3c64xx_spi_unmap_one_msg(sdd, msg, xfer);
+
+			target_len -= xfer->len;
 
 	enable_datapath(sdd, spi, xfer, use_dma);
 

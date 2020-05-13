@@ -512,6 +512,7 @@ extern void sec_debug_set_extra_info_epd(char *str);
 #define sec_debug_set_extra_info_panic(a)	do { } while (0)
 #define sec_debug_set_extra_info_backtrace(a)	do { } while (0)
 #define sec_debug_set_extra_info_backtrace_cpu(a, b)	do { } while (0)
+#define sec_debug_set_extra_info_backtrace_task(a)	do { } while (0)
 #define sec_debug_set_extra_info_evt_version()	do { } while (0)
 #define sec_debug_set_extra_info_sysmmu(a)	do { } while (0)
 #define sec_debug_set_extra_info_busmon(a)	do { } while (0)
@@ -645,7 +646,9 @@ struct sec_debug_next {
 	struct sec_debug_spinlock_info rlock;
 	struct sec_debug_kernel_data kernd;
 
+#ifdef CONFIG_SEC_DEBUG_AUTO_COMMENT
 	struct sec_debug_auto_comment auto_comment;
+#endif
 	struct sec_debug_shared_buffer extra_info;
 };
 
@@ -672,7 +675,7 @@ extern void sec_debug_tsp_command_history(char *buf);
 #define sec_debug_tsp_raw_data(a, ...)			do { } while (0)
 #define sec_debug_tsp_raw_data_msg(a, b, ...)		do { } while (0)
 #define sec_tsp_raw_data_clear()			do { } while (0)
-#define sec_debug_tsp_command_history()			do { } while (0)
+#define sec_debug_tsp_command_history(buf)		do { } while (0)
 #endif /* CONFIG_SEC_DEBUG_TSP_LOG */
 
 #ifdef CONFIG_TOUCHSCREEN_DUMP_MODE

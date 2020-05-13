@@ -125,3 +125,13 @@ all.config
 
 # fetched Android config fragments
 kernel/configs/android-*.cfg
+
+# samsung
+*.dtbo
+*.reverse.dts
+__pycache__/
+*.pyc
+
+/build.mkbootimg
+/*.img
+/build.info
