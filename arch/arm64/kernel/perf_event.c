@@ -262,12 +262,6 @@ static const unsigned armv8_a73_perf_cache_map[PERF_COUNT_HW_CACHE_MAX]
 
 	[C(L1D)][C(OP_READ)][C(RESULT_ACCESS)]	= ARMV8_IMPDEF_PERFCTR_L1D_CACHE_RD,
 	[C(L1D)][C(OP_WRITE)][C(RESULT_ACCESS)]	= ARMV8_IMPDEF_PERFCTR_L1D_CACHE_WR,
-
-	[C(NODE)][C(OP_READ)][C(RESULT_ACCESS)]	= ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_RD,
-	[C(NODE)][C(OP_WRITE)][C(RESULT_ACCESS)] = ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_WR,
-
-	[C(NODE)][C(OP_READ)][C(RESULT_ACCESS)]	= ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_RD,
-	[C(NODE)][C(OP_WRITE)][C(RESULT_ACCESS)] = ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_WR,
 };
 
 static const unsigned armv8_thunder_perf_cache_map[PERF_COUNT_HW_CACHE_MAX]
@@ -305,29 +299,6 @@ static const unsigned armv8_vulcan_perf_cache_map[PERF_COUNT_HW_CACHE_MAX]
 	[C(DTLB)][C(OP_WRITE)][C(RESULT_ACCESS)] = ARMV8_IMPDEF_PERFCTR_L1D_TLB_WR,
 	[C(DTLB)][C(OP_READ)][C(RESULT_MISS)]	= ARMV8_IMPDEF_PERFCTR_L1D_TLB_REFILL_RD,
 	[C(DTLB)][C(OP_WRITE)][C(RESULT_MISS)]	= ARMV8_IMPDEF_PERFCTR_L1D_TLB_REFILL_WR,
-
-	[C(NODE)][C(OP_READ)][C(RESULT_ACCESS)]	= ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_RD,
-	[C(NODE)][C(OP_WRITE)][C(RESULT_ACCESS)] = ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_WR,
-};
-
-static const unsigned armv8_m3_perf_cache_map[PERF_COUNT_HW_CACHE_MAX]
-					      [PERF_COUNT_HW_CACHE_OP_MAX]
-					      [PERF_COUNT_HW_CACHE_RESULT_MAX] = {
-	PERF_CACHE_MAP_ALL_UNSUPPORTED,
-
-	[C(L1D)][C(OP_READ)][C(RESULT_ACCESS)]	= ARMV8_PMUV3_PERFCTR_L1D_CACHE,
-	[C(L1D)][C(OP_READ)][C(RESULT_MISS)]	= ARMV8_PMUV3_PERFCTR_L1D_CACHE_REFILL,
-	[C(L1D)][C(OP_WRITE)][C(RESULT_ACCESS)]	= ARMV8_PMUV3_PERFCTR_L1D_CACHE,
-	[C(L1D)][C(OP_WRITE)][C(RESULT_MISS)]	= ARMV8_PMUV3_PERFCTR_L1D_CACHE_REFILL,
-
-	[C(L1I)][C(OP_READ)][C(RESULT_ACCESS)]	= ARMV8_PMUV3_PERFCTR_L1I_CACHE,
-	[C(L1I)][C(OP_READ)][C(RESULT_MISS)]	= ARMV8_PMUV3_PERFCTR_L1I_CACHE_REFILL,
-
-	[C(DTLB)][C(OP_READ)][C(RESULT_MISS)]	= ARMV8_PMUV3_PERFCTR_L1D_TLB_REFILL,
-	[C(DTLB)][C(OP_READ)][C(RESULT_ACCESS)]	= ARMV8_PMUV3_PERFCTR_L1D_TLB,
-
-	[C(ITLB)][C(OP_READ)][C(RESULT_MISS)]	= ARMV8_PMUV3_PERFCTR_L1I_TLB_REFILL,
-	[C(ITLB)][C(OP_READ)][C(RESULT_ACCESS)]	= ARMV8_PMUV3_PERFCTR_L1I_TLB,
 
 	[C(NODE)][C(OP_READ)][C(RESULT_ACCESS)]	= ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_RD,
 	[C(NODE)][C(OP_WRITE)][C(RESULT_ACCESS)] = ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_WR,
@@ -580,41 +551,6 @@ static inline void armv8pmu_write_counter(struct perf_event *event, u32 value)
 	} else if (armv8pmu_select_counter(idx) == idx)
 		write_sysreg(value, pmxevcntr_el0);
 }
-
-/* Accessor macros for the pmu registers. */
-#define AARCH64_PMU_READ(N, REG, VAL) do {\
-	VAL = read_sysreg(pm##REG##N##_el0);\
-} while (0)
-
-#define AARCH64_PMU_WRITE(N, REG, VAL) do {\
-	write_sysreg(VAL, pm##REG##N##_el0);\
-} while (0)
-
-#define READ_PMU_REG_CASE(N, REG, VAL)		\
-	case (N):				\
-		AARCH64_PMU_READ(N, REG, VAL);	\
-		break
-
-#define WRITE_PMU_REG_CASE(N, REG, VAL)		\
-	case (N):				\
-		AARCH64_PMU_WRITE(N, REG, VAL);	\
-		break
-
-#define GEN_READ_PMU_REG_CASES(REG, VAL)	\
-	READ_PMU_REG_CASE(0, REG, VAL);		\
-	READ_PMU_REG_CASE(1, REG, VAL);		\
-	READ_PMU_REG_CASE(2, REG, VAL);		\
-	READ_PMU_REG_CASE(3, REG, VAL);		\
-	READ_PMU_REG_CASE(4, REG, VAL);		\
-	READ_PMU_REG_CASE(5, REG, VAL);
-
-#define GEN_WRITE_PMU_REG_CASES(REG, VAL)	\
-	WRITE_PMU_REG_CASE(0, REG, VAL);	\
-	WRITE_PMU_REG_CASE(1, REG, VAL);	\
-	WRITE_PMU_REG_CASE(2, REG, VAL);	\
-	WRITE_PMU_REG_CASE(3, REG, VAL);	\
-	WRITE_PMU_REG_CASE(4, REG, VAL);	\
-	WRITE_PMU_REG_CASE(5, REG, VAL);
 
 static inline void armv8pmu_write_evtype(int idx, u32 val)
 {
@@ -897,11 +833,6 @@ static void armv8pmu_reset(void *info)
 	for (idx = ARMV8_IDX_CYCLE_COUNTER; idx < nb_cnt; ++idx) {
 		armv8pmu_disable_counter(idx);
 		armv8pmu_disable_intens(idx);
-		switch (idx) {
-		GEN_WRITE_PMU_REG_CASES(evcntr, 0);
-		default:
-			break;
-		}
 	}
 
 	/*
@@ -967,11 +898,6 @@ static int armv8_vulcan_map_event(struct perf_event *event)
 {
 	return __armv8_pmuv3_map_event(event, NULL,
 				       &armv8_vulcan_perf_cache_map);
-}
-
-static int armv8_m3_map_event(struct perf_event *event)
-{
-	return __armv8_pmuv3_map_event(event, NULL, &armv8_m3_perf_cache_map);
 }
 
 struct armv8pmu_probe_info {
@@ -1177,23 +1103,6 @@ static int armv8_vulcan_pmu_init(struct arm_pmu *cpu_pmu)
 	return 0;
 }
 
-static int armv8_m3_pmu_init(struct arm_pmu *cpu_pmu)
-{
-	int ret = armv8_pmu_init(cpu_pmu);
-
-	if (ret)
-		return ret;
-
-	cpu_pmu->name			= "armv8_exynos_m3";
-	cpu_pmu->map_event		= armv8_m3_map_event;
-	cpu_pmu->attr_groups[ARMPMU_ATTR_GROUP_EVENTS] =
-		&armv8_pmuv3_events_attr_group;
-	cpu_pmu->attr_groups[ARMPMU_ATTR_GROUP_FORMATS] =
-		&armv8_pmuv3_format_attr_group;
-
-	return 0;
-}
-
 static const struct of_device_id armv8_pmu_of_device_ids[] = {
 	{.compatible = "arm,armv8-pmuv3",	.data = armv8_pmuv3_init},
 	{.compatible = "arm,cortex-a35-pmu",	.data = armv8_a35_pmu_init},
@@ -1201,7 +1110,6 @@ static const struct of_device_id armv8_pmu_of_device_ids[] = {
 	{.compatible = "arm,cortex-a57-pmu",	.data = armv8_a57_pmu_init},
 	{.compatible = "arm,cortex-a72-pmu",	.data = armv8_a72_pmu_init},
 	{.compatible = "arm,cortex-a73-pmu",	.data = armv8_a73_pmu_init},
-	{.compatible = "samsung,exynos-m3-pmu",	.data = armv8_m3_pmu_init},
 	{.compatible = "cavium,thunder-pmu",	.data = armv8_thunder_pmu_init},
 	{.compatible = "brcm,vulcan-pmu",	.data = armv8_vulcan_pmu_init},
 	{},

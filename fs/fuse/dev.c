@@ -135,9 +135,13 @@ static bool fuse_block_alloc(struct fuse_conn *fc, bool for_background)
 
 static void fuse_drop_waiting(struct fuse_conn *fc)
 {
-	if (fc->connected) {
-		atomic_dec(&fc->num_waiting);
-	} else if (atomic_dec_and_test(&fc->num_waiting)) {
+	/*
+	 * lockess check of fc->connected is okay, because atomic_dec_and_test()
+	 * provides a memory barrier mached with the one in fuse_wait_aborted()
+	 * to ensure no wake-up is missed.
+	 */
+	if (atomic_dec_and_test(&fc->num_waiting) &&
+	    !READ_ONCE(fc->connected)) {
 		/* wake up aborters */
 		wake_up_all(&fc->blocked_waitq);
 	}
@@ -152,7 +156,7 @@ static struct fuse_req *__fuse_get_req(struct fuse_conn *fc, unsigned npages,
 
 	if (fuse_block_alloc(fc, for_background)) {
 		err = -EINTR;
-		if (wait_event_freezable_exclusive(fc->blocked_waitq,
+		if (wait_event_killable_exclusive(fc->blocked_waitq,
 				!fuse_block_alloc(fc, for_background)))
 			goto out;
 	}
@@ -212,7 +216,7 @@ static struct fuse_req *get_reserved_req(struct fuse_conn *fc,
 	struct fuse_file *ff = file->private_data;
 
 	do {
-		wait_event_freezable(fc->reserved_req_waitq, ff->reserved_req);
+		wait_event(fc->reserved_req_waitq, ff->reserved_req);
 		spin_lock(&fc->lock);
 		if (ff->reserved_req) {
 			req = ff->reserved_req;
@@ -261,7 +265,7 @@ struct fuse_req *fuse_get_req_nofail_nopages(struct fuse_conn *fc,
 	struct fuse_req *req;
 
 	atomic_inc(&fc->num_waiting);
-	wait_event_freezable(fc->blocked_waitq, fc->initialized);
+	wait_event(fc->blocked_waitq, fc->initialized);
 	/* Matches smp_wmb() in fuse_set_initialized() */
 	smp_rmb();
 	req = fuse_request_alloc(0);
@@ -437,8 +441,8 @@ static void request_wait_answer(struct fuse_conn *fc, struct fuse_req *req)
 	int err;
 
 	if (!fc->no_interrupt) {
-		/* Any signal and freeze may interrupt this */
-		err = wait_event_freezable(req->waitq,
+		/* Any signal may interrupt this */
+		err = wait_event_interruptible(req->waitq,
 					test_bit(FR_FINISHED, &req->flags));
 		if (!err)
 			return;
@@ -451,7 +455,8 @@ static void request_wait_answer(struct fuse_conn *fc, struct fuse_req *req)
 	}
 
 	if (!test_bit(FR_FORCE, &req->flags)) {
-		err = wait_event_freezable(req->waitq,
+		/* Only fatal signals may interrupt this */
+		err = wait_event_killable(req->waitq,
 					test_bit(FR_FINISHED, &req->flags));
 		if (!err)
 			return;
@@ -1249,7 +1254,7 @@ static ssize_t fuse_dev_do_read(struct fuse_dev *fud, struct file *file,
 	    !request_pending(fiq))
 		goto err_unlock;
 
-	err = wait_event_freezable_exclusive_locked(fiq->waitq,
+	err = wait_event_interruptible_exclusive_locked(fiq->waitq,
 				!fiq->connected || request_pending(fiq));
 	if (err)
 		goto err_unlock;
@@ -1677,7 +1682,7 @@ static int fuse_retrieve(struct fuse_conn *fc, struct inode *inode,
 	offset = outarg->offset & ~PAGE_MASK;
 	file_size = i_size_read(inode);
 
-	num = outarg->size;
+	num = min(outarg->size, fc->max_write);
 	if (outarg->offset > file_size)
 		num = 0;
 	else if (outarg->offset + num > file_size)
@@ -1990,10 +1995,8 @@ static ssize_t fuse_dev_splice_write(struct pipe_inode_info *pipe,
 		rem += pipe->bufs[(pipe->curbuf + idx) & (pipe->buffers - 1)].len;
 
 	ret = -EINVAL;
-	if (rem < len) {
-		pipe_unlock(pipe);
-		goto out;
-	}
+	if (rem < len)
+		goto out_free;
 
 	rem = len;
 	while (rem) {
@@ -2011,7 +2014,9 @@ static ssize_t fuse_dev_splice_write(struct pipe_inode_info *pipe,
 			pipe->curbuf = (pipe->curbuf + 1) & (pipe->buffers - 1);
 			pipe->nrbufs--;
 		} else {
-			pipe_buf_get(pipe, ibuf);
+			if (!pipe_buf_get(pipe, ibuf))
+				goto out_free;
+
 			*obuf = *ibuf;
 			obuf->flags &= ~PIPE_BUF_FLAG_GIFT;
 			obuf->len = rem;
@@ -2034,11 +2039,11 @@ static ssize_t fuse_dev_splice_write(struct pipe_inode_info *pipe,
 	ret = fuse_dev_do_write(fud, &cs, len);
 
 	pipe_lock(pipe);
+out_free:
 	for (idx = 0; idx < nbuf; idx++)
 		pipe_buf_release(pipe, &bufs[idx]);
 	pipe_unlock(pipe);
 
-out:
 	kfree(bufs);
 	return ret;
 }
@@ -2179,7 +2184,9 @@ EXPORT_SYMBOL_GPL(fuse_abort_conn);
 
 void fuse_wait_aborted(struct fuse_conn *fc)
 {
-	wait_event_freezable(fc->blocked_waitq, atomic_read(&fc->num_waiting) == 0);
+	/* matches implicit memory barrier in fuse_drop_waiting() */
+	smp_mb();
+	wait_event(fc->blocked_waitq, atomic_read(&fc->num_waiting) == 0);
 }
 
 int fuse_dev_release(struct inode *inode, struct file *file)

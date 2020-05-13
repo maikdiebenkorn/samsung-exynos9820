@@ -707,13 +707,7 @@ static ssize_t show_rps_map(struct netdev_rx_queue *queue, char *buf)
 	return len < PAGE_SIZE ? len : -EINVAL;
 }
 
-ssize_t netdev_show_rps_map(struct netdev_rx_queue *queue, char *buf)
-{
-	return show_rps_map(queue, buf);
-}
-EXPORT_SYMBOL_GPL(netdev_show_rps_map);
-
-ssize_t store_rps_map(struct netdev_rx_queue *queue,
+static ssize_t store_rps_map(struct netdev_rx_queue *queue,
 			     const char *buf, size_t len)
 {
 	struct rps_map *old_map, *map;
@@ -771,13 +765,6 @@ ssize_t store_rps_map(struct netdev_rx_queue *queue,
 	return len;
 }
 
-ssize_t netdev_store_rps_map(struct netdev_rx_queue *queue,
-			     const char *buf, size_t len)
-{
-	return store_rps_map(queue, buf, len);
-}
-EXPORT_SYMBOL_GPL(netdev_store_rps_map);
-
 static ssize_t show_rps_dev_flow_table_cnt(struct netdev_rx_queue *queue,
 					   char *buf)
 {
@@ -792,13 +779,6 @@ static ssize_t show_rps_dev_flow_table_cnt(struct netdev_rx_queue *queue,
 
 	return sprintf(buf, "%lu\n", val);
 }
-
-ssize_t netdev_show_rps_dev_flow_table_cnt(struct netdev_rx_queue *queue,
-					   char *buf)
-{
-	return show_rps_dev_flow_table_cnt(queue, buf);
-}
-EXPORT_SYMBOL_GPL(netdev_show_rps_dev_flow_table_cnt);
 
 static void rps_dev_flow_table_release(struct rcu_head *rcu)
 {
@@ -866,13 +846,6 @@ static ssize_t store_rps_dev_flow_table_cnt(struct netdev_rx_queue *queue,
 	return len;
 }
 
-ssize_t netdev_store_rps_dev_flow_table_cnt(struct netdev_rx_queue *queue,
-					    const char *buf, size_t len)
-{
-	return store_rps_dev_flow_table_cnt(queue, buf, len);
-}
-EXPORT_SYMBOL_GPL(netdev_store_rps_dev_flow_table_cnt);
-
 static struct rx_queue_attribute rps_cpus_attribute __ro_after_init
 	= __ATTR(rps_cpus, S_IRUGO | S_IWUSR, show_rps_map, store_rps_map);
 
@@ -938,24 +911,29 @@ static int rx_queue_add_kobject(struct net_device *dev, int index)
 	struct kobject *kobj = &queue->kobj;
 	int error = 0;
 
+	/* Kobject_put later will trigger rx_queue_release call which
+	 * decreases dev refcount: Take that reference here
+	 */
+	dev_hold(queue->dev);
+
 	kobj->kset = dev->queues_kset;
 	error = kobject_init_and_add(kobj, &rx_queue_ktype, NULL,
 				     "rx-%u", index);
 	if (error)
-		return error;
-
-	dev_hold(queue->dev);
+		goto err;
 
 	if (dev->sysfs_rx_queue_group) {
 		error = sysfs_create_group(kobj, dev->sysfs_rx_queue_group);
-		if (error) {
-			kobject_put(kobj);
-			return error;
-		}
+		if (error)
+			goto err;
 	}
 
 	kobject_uevent(kobj, KOBJ_ADD);
 
+	return error;
+
+err:
+	kobject_put(kobj);
 	return error;
 }
 #endif /* CONFIG_SYSFS */
@@ -1349,25 +1327,29 @@ static int netdev_queue_add_kobject(struct net_device *dev, int index)
 	struct kobject *kobj = &queue->kobj;
 	int error = 0;
 
+	/* Kobject_put later will trigger netdev_queue_release call
+	 * which decreases dev refcount: Take that reference here
+	 */
+	dev_hold(queue->dev);
+
 	kobj->kset = dev->queues_kset;
 	error = kobject_init_and_add(kobj, &netdev_queue_ktype, NULL,
 				     "tx-%u", index);
 	if (error)
-		return error;
-
-	dev_hold(queue->dev);
+		goto err;
 
 #ifdef CONFIG_BQL
 	error = sysfs_create_group(kobj, &dql_group);
-	if (error) {
-		kobject_put(kobj);
-		return error;
-	}
+	if (error)
+		goto err;
 #endif
 
 	kobject_uevent(kobj, KOBJ_ADD);
-
 	return 0;
+
+err:
+	kobject_put(kobj);
+	return error;
 }
 #endif /* CONFIG_SYSFS */
 

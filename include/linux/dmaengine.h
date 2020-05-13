@@ -677,6 +677,7 @@ struct dma_filter {
  * @fill_align: alignment shift for memset operations
  * @dev_id: unique device ID
  * @dev: struct device reference for dma mapping api
+ * @owner: owner module (automatically set based on the provided dev)
  * @src_addr_widths: bit mask of src addr widths the device supports
  * @dst_addr_widths: bit mask of dst addr widths the device supports
  * @directions: bit mask of slave direction the device supports since
@@ -738,6 +739,7 @@ struct dma_device {
 
 	int dev_id;
 	struct device *dev;
+	struct module *owner;
 
 	u32 src_addr_widths;
 	u32 dst_addr_widths;
@@ -782,7 +784,7 @@ struct dma_device {
 	struct dma_async_tx_descriptor *(*device_prep_dma_cyclic)(
 		struct dma_chan *chan, dma_addr_t buf_addr, size_t buf_len,
 		size_t period_len, enum dma_transfer_direction direction,
-		unsigned long flags, void *context);
+		unsigned long flags);
 	struct dma_async_tx_descriptor *(*device_prep_interleaved_dma)(
 		struct dma_chan *chan, struct dma_interleaved_template *xt,
 		unsigned long flags);
@@ -868,7 +870,7 @@ static inline struct dma_async_tx_descriptor *dmaengine_prep_dma_cyclic(
 		return NULL;
 
 	return chan->device->device_prep_dma_cyclic(chan, buf_addr, buf_len,
-						period_len, dir, flags, NULL);
+						period_len, dir, flags);
 }
 
 static inline struct dma_async_tx_descriptor *dmaengine_prep_interleaved_dma(
@@ -1362,8 +1364,11 @@ static inline int dma_get_slave_caps(struct dma_chan *chan,
 static inline int dmaengine_desc_set_reuse(struct dma_async_tx_descriptor *tx)
 {
 	struct dma_slave_caps caps;
+	int ret;
 
-	dma_get_slave_caps(tx->chan, &caps);
+	ret = dma_get_slave_caps(tx->chan, &caps);
+	if (ret)
+		return ret;
 
 	if (caps.descriptor_reuse) {
 		tx->flags |= DMA_CTRL_REUSE;

@@ -258,6 +258,11 @@ void swsusp_show_speed(ktime_t start, ktime_t stop,
 		(kps % 1000) / 10);
 }
 
+__weak int arch_resume_nosmt(void)
+{
+	return 0;
+}
+
 /**
  * create_image - Create a hibernation image.
  * @platform_mode: Whether or not to use the platform driver.
@@ -299,13 +304,9 @@ static int create_image(int platform_mode)
 	in_suspend = 1;
 	save_processor_state();
 	trace_suspend_resume(TPS("machine_suspend"), PM_EVENT_HIBERNATE, true);
-	dbg_snapshot_suspend("machine_suspend", swsusp_arch_suspend,
-				NULL, PM_EVENT_HIBERNATE, DSS_FLAG_IN);
 	error = swsusp_arch_suspend();
 	/* Restore control flow magically appears here */
 	restore_processor_state();
-	dbg_snapshot_suspend("machine_suspend", swsusp_arch_suspend,
-				NULL, PM_EVENT_HIBERNATE, DSS_FLAG_OUT);
 	trace_suspend_resume(TPS("machine_suspend"), PM_EVENT_HIBERNATE, false);
 	if (error)
 		pr_err("Error %d creating hibernation image\n", error);
@@ -325,6 +326,10 @@ static int create_image(int platform_mode)
 
  Enable_cpus:
 	enable_nonboot_cpus();
+
+	/* Allow architectures to do nosmt-specific post-resume dances */
+	if (!in_suspend)
+		error = arch_resume_nosmt();
 
  Platform_finish:
 	platform_finish(platform_mode);
@@ -887,6 +892,13 @@ static int software_resume(void)
 	error = freeze_processes();
 	if (error)
 		goto Close_Finish;
+
+	error = freeze_kernel_threads();
+	if (error) {
+		thaw_processes();
+		goto Close_Finish;
+	}
+
 	error = load_image_and_restore();
 	thaw_processes();
  Finish:

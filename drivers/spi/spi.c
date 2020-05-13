@@ -991,6 +991,8 @@ static int spi_map_msg(struct spi_controller *ctlr, struct spi_message *msg)
 		if (max_tx || max_rx) {
 			list_for_each_entry(xfer, &msg->transfers,
 					    transfer_list) {
+				if (!xfer->len)
+					continue;
 				if (!xfer->tx_buf)
 					xfer->tx_buf = ctlr->dummy_tx;
 				if (!xfer->rx_buf)
@@ -1237,15 +1239,10 @@ static void __spi_pump_messages(struct spi_controller *ctlr, bool in_kthread)
 		ret = ctlr->prepare_transfer_hardware(ctlr);
 		if (ret) {
 			dev_err(&ctlr->dev,
-				"failed to prepare transfer hardware: %d\n",
-				ret);
+				"failed to prepare transfer hardware\n");
 
 			if (ctlr->auto_runtime_pm)
 				pm_runtime_put(ctlr->dev.parent);
-
-			ctlr->cur_msg->status = ret;
-			spi_finalize_current_message(ctlr);
-
 			mutex_unlock(&ctlr->io_mutex);
 			return;
 		}
@@ -1272,10 +1269,7 @@ static void __spi_pump_messages(struct spi_controller *ctlr, bool in_kthread)
 		goto out;
 	}
 
-	dbg_snapshot_spi(ctlr, ctlr->cur_msg, DSS_FLAG_IN);
 	ret = ctlr->transfer_one_message(ctlr, ctlr->cur_msg);
-	dbg_snapshot_spi(ctlr, ctlr->cur_msg, DSS_FLAG_OUT);
-
 	if (ret) {
 		dev_err(&ctlr->dev,
 			"failed to transfer one message from queue\n");

@@ -145,7 +145,6 @@
 #include <linux/crash_dump.h>
 #include <linux/sctp.h>
 #include <net/udp_tunnel.h>
-#include <linux/linkforward.h>
 
 #include "net-sysfs.h"
 
@@ -384,11 +383,6 @@ static inline void netdev_set_addr_lockdep_class(struct net_device *dev)
 
 static inline struct list_head *ptype_head(const struct packet_type *pt)
 {
-	struct list_head *ret = dropdump_ptype_head(pt);
-
-	if (unlikely(ret))
-		return ret;
-
 	if (pt->type == htons(ETH_P_ALL))
 		return pt->dev ? &pt->dev->ptype_all : &ptype_all;
 	else
@@ -3035,7 +3029,7 @@ struct sk_buff *dev_hard_start_xmit(struct sk_buff *first, struct net_device *de
 		}
 
 		skb = next;
-		if (netif_xmit_stopped(txq) && skb) {
+		if (netif_tx_queue_stopped(txq) && skb) {
 			rc = NETDEV_TX_BUSY;
 			break;
 		}
@@ -3581,7 +3575,8 @@ EXPORT_SYMBOL(netdev_max_backlog);
 
 int netdev_tstamp_prequeue __read_mostly = 1;
 int netdev_budget __read_mostly = 300;
-unsigned int __read_mostly netdev_budget_usecs = 2000;
+/* Must be at least 2 jiffes to guarantee 1 jiffy timeout */
+unsigned int __read_mostly netdev_budget_usecs = 2 * USEC_PER_SEC / HZ;
 int weight_p __read_mostly = 64;           /* old backlog weight */
 int dev_weight_rx_bias __read_mostly = 1;  /* bias for backlog weight */
 int dev_weight_tx_bias __read_mostly = 1;  /* bias for output_queue quota */
@@ -3912,8 +3907,6 @@ drop:
 	local_irq_restore(flags);
 
 	atomic_long_inc(&skb->dev->rx_dropped);
-
-	DROPDUMP_QPCAP_SKB(skb, NET_DROPDUMP_OPT_CORE_BACKLOGFAIL);
 	kfree_skb(skb);
 	return NET_RX_DROP;
 }
@@ -4042,9 +4035,6 @@ static int netif_rx_internal(struct sk_buff *skb)
 
 	trace_netif_rx(skb);
 
-#ifdef CONFIG_NET_SUPPORT_DROPDUMP
-	skb->dropmask = PACKET_IN;
-#endif
 	if (static_key_false(&generic_xdp_needed)) {
 		int ret;
 
@@ -4492,8 +4482,6 @@ drop:
 			atomic_long_inc(&skb->dev->rx_dropped);
 		else
 			atomic_long_inc(&skb->dev->rx_nohandler);
-
-		DROPDUMP_QPCAP_SKB(skb, NET_DROPDUMP_OPT_CORE_BACKLOGFAIL1);
 		kfree_skb(skb);
 		/* Jamal, now you will not able to escape explaining
 		 * me how you were going to use this. :-)
@@ -4508,11 +4496,6 @@ out:
 static int __netif_receive_skb(struct sk_buff *skb)
 {
 	int ret;
-
-#ifdef CONFIG_LINK_FORWARD
-	if (CHECK_LINK_FORWARD(*((u32 *)&skb->cb)))
-		return dev_linkforward_queue_xmit(skb);
-#endif
 
 	if (sk_memalloc_socks() && skb_pfmemalloc(skb)) {
 		unsigned int noreclaim_flag;
@@ -4574,9 +4557,6 @@ static int netif_receive_skb_internal(struct sk_buff *skb)
 
 	net_timestamp_check(netdev_tstamp_prequeue, skb);
 
-#ifdef CONFIG_NET_SUPPORT_DROPDUMP
-	skb->dropmask = PACKET_IN;
-#endif
 	if (skb_defer_rx_timestamp(skb))
 		return NET_RX_SUCCESS;
 
@@ -5219,11 +5199,7 @@ static int process_backlog(struct napi_struct *napi, int quota)
 			rcu_read_unlock();
 			input_queue_head_incr(sd);
 			if (++work >= quota)
-#ifdef CONFIG_MODEM_IF_NET_GRO
-				goto state_changed;
-#else
 				return work;
-#endif
 
 		}
 
@@ -5247,12 +5223,6 @@ static int process_backlog(struct napi_struct *napi, int quota)
 		rps_unlock(sd);
 		local_irq_enable();
 	}
-
-#ifdef CONFIG_MODEM_IF_NET_GRO
-state_changed:
-	napi_gro_flush(napi, false);
-	sd->current_napi = NULL;
-#endif
 
 	return work;
 }
@@ -5626,11 +5596,6 @@ static int napi_poll(struct napi_struct *n, struct list_head *repoll)
 	 */
 	work = 0;
 	if (test_bit(NAPI_STATE_SCHED, &n->state)) {
-#ifdef CONFIG_MODEM_IF_NET_GRO
-		struct softnet_data *sd = this_cpu_ptr(&softnet_data);
-
-		sd->current_napi = n;
-#endif
 		work = n->poll(n, weight);
 		trace_napi_poll(n, work, weight);
 	}
@@ -5673,20 +5638,6 @@ out_unlock:
 
 	return work;
 }
-
-#if defined(CONFIG_SEC_SIPC_MODEM_IF) || defined(CONFIG_SEC_SIPC_DUAL_MODEM_IF)
-struct napi_struct *napi_get_current(void)
-{
-#ifdef CONFIG_MODEM_IF_NET_GRO
-	struct softnet_data *sd = this_cpu_ptr(&softnet_data);
-
-	return sd->current_napi;
-#else
-	return NULL;
-#endif
-}
-EXPORT_SYMBOL(napi_get_current);
-#endif
 
 static __latent_entropy void net_rx_action(struct softirq_action *h)
 {
@@ -6819,11 +6770,7 @@ int __dev_change_flags(struct net_device *dev, unsigned int flags)
 
 	dev->flags = (flags & (IFF_DEBUG | IFF_NOTRAILERS | IFF_NOARP |
 			       IFF_DYNAMIC | IFF_MULTICAST | IFF_PORTSEL |
-			       IFF_AUTOMEDIA
-#ifdef CONFIG_MPTCP
-					 | IFF_NOMULTIPATH | IFF_MPBACKUP
-#endif
-)) |
+			       IFF_AUTOMEDIA)) |
 		     (dev->flags & (IFF_UP | IFF_VOLATILE | IFF_PROMISC |
 				    IFF_ALLMULTI));
 
@@ -6930,7 +6877,8 @@ int __dev_set_mtu(struct net_device *dev, int new_mtu)
 	if (ops->ndo_change_mtu)
 		return ops->ndo_change_mtu(dev, new_mtu);
 
-	dev->mtu = new_mtu;
+	/* Pairs with all the lockless reads of dev->mtu in the stack */
+	WRITE_ONCE(dev->mtu, new_mtu);
 	return 0;
 }
 EXPORT_SYMBOL(__dev_set_mtu);
@@ -6949,18 +6897,9 @@ int dev_set_mtu(struct net_device *dev, int new_mtu)
 	if (new_mtu == dev->mtu)
 		return 0;
 
-	/* MTU must be positive, and in range */
-	if (new_mtu < 0 || new_mtu < dev->min_mtu) {
-		net_err_ratelimited("%s: Invalid MTU %d requested, hw min %d\n",
-				    dev->name, new_mtu, dev->min_mtu);
-		return -EINVAL;
-	}
-
-	if (dev->max_mtu > 0 && new_mtu > dev->max_mtu) {
-		net_err_ratelimited("%s: Invalid MTU %d requested, hw max %d\n",
-				    dev->name, new_mtu, dev->max_mtu);
-		return -EINVAL;
-	}
+	err = dev_validate_mtu(dev, new_mtu);
+	if (err)
+		return err;
 
 	if (!netif_device_present(dev))
 		return -ENODEV;
@@ -7720,8 +7659,10 @@ int register_netdevice(struct net_device *dev)
 		goto err_uninit;
 
 	ret = netdev_register_kobject(dev);
-	if (ret)
+	if (ret) {
+		dev->reg_state = NETREG_UNREGISTERED;
 		goto err_uninit;
+	}
 	dev->reg_state = NETREG_REGISTERED;
 
 	__netdev_update_features(dev);
@@ -7752,6 +7693,8 @@ int register_netdevice(struct net_device *dev)
 	ret = notifier_to_errno(ret);
 	if (ret) {
 		rollback_registered(dev);
+		rcu_barrier();
+
 		dev->reg_state = NETREG_UNREGISTERED;
 	}
 	/*
@@ -7817,6 +7760,23 @@ int init_dummy_netdev(struct net_device *dev)
 }
 EXPORT_SYMBOL_GPL(init_dummy_netdev);
 
+
+int dev_validate_mtu(struct net_device *dev, int new_mtu)
+{
+	/* MTU must be positive, and in range */
+	if (new_mtu < 0 || new_mtu < dev->min_mtu) {
+		net_err_ratelimited("%s: Invalid MTU %d requested, hw min %d\n",
+				    dev->name, new_mtu, dev->min_mtu);
+		return -EINVAL;
+	}
+
+	if (dev->max_mtu > 0 && new_mtu > dev->max_mtu) {
+		net_err_ratelimited("%s: Invalid MTU %d requested, hw max %d\n",
+				    dev->name, new_mtu, dev->max_mtu);
+		return -EINVAL;
+	}
+	return 0;
+}
 
 /**
  *	register_netdev	- register a network device
@@ -8861,10 +8821,6 @@ static int __init net_dev_init(void)
 
 	open_softirq(NET_TX_SOFTIRQ, net_tx_action);
 	open_softirq(NET_RX_SOFTIRQ, net_rx_action);
-
-#ifdef CONFIG_LINK_FORWARD
-	linkforward_init();
-#endif
 
 	rc = cpuhp_setup_state_nocalls(CPUHP_NET_DEV_DEAD, "net/dev:dead",
 				       NULL, dev_cpu_dead);

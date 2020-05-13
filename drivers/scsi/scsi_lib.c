@@ -71,11 +71,11 @@ int scsi_init_sense_cache(struct Scsi_Host *shost)
 	struct kmem_cache *cache;
 	int ret = 0;
 
+	mutex_lock(&scsi_sense_cache_mutex);
 	cache = scsi_select_sense_cache(shost->unchecked_isa_dma);
 	if (cache)
-		return 0;
+		goto exit;
 
-	mutex_lock(&scsi_sense_cache_mutex);
 	if (shost->unchecked_isa_dma) {
 		scsi_sense_isadma_cache =
 			kmem_cache_create("scsi_sense_cache(DMA)",
@@ -90,7 +90,7 @@ int scsi_init_sense_cache(struct Scsi_Host *shost)
 		if (!scsi_sense_cache)
 			ret = -ENOMEM;
 	}
-
+ exit:
 	mutex_unlock(&scsi_sense_cache_mutex);
 	return ret;
 }
@@ -1426,48 +1426,6 @@ static void scsi_unprep_fn(struct request_queue *q, struct request *req)
 	scsi_uninit_cmd(blk_mq_rq_to_pdu(req));
 }
 
-#ifdef CONFIG_BLK_TURBO_WRITE
-static void scsi_tw_try_on_fn(struct request_queue *q)
-{
-	struct scsi_device *sdev = q->queuedata;
-	struct Scsi_Host *shost = sdev->host;
-
-	if (shost->hostt->tw_ctrl)
-		shost->hostt->tw_ctrl(sdev, 1);
-}
-
-static void scsi_tw_try_off_fn(struct request_queue *q)
-{
-	struct scsi_device *sdev = q->queuedata;
-	struct Scsi_Host *shost = sdev->host;
-
-	if (shost->hostt->tw_ctrl)
-		shost->hostt->tw_ctrl(sdev, 0);
-}
-
-void scsi_reset_tw_state(struct Scsi_Host *shost)
-{
-	struct scsi_device *sdev;
-
-	shost_for_each_device(sdev, shost) {
-		if (sdev->support_tw_lu)
-			blk_reset_tw_state(sdev->request_queue);
-	}
-}
-EXPORT_SYMBOL(scsi_reset_tw_state);
-
-void scsi_alloc_tw(struct scsi_device *sdev)
-{
-	if (sdev->support_tw_lu) {
-		blk_alloc_turbo_write(sdev->request_queue);
-		blk_register_tw_try_on_fn(sdev->request_queue, scsi_tw_try_on_fn);
-		blk_register_tw_try_off_fn(sdev->request_queue, scsi_tw_try_off_fn);
-		printk(KERN_INFO "%s: register scsi ufs tw interface for LU %d\n",
-					__func__, sdev->lun);
-	}
-}
-#endif
-
 /*
  * scsi_dev_queue_ready: if we can send requests to sdev, return 1 else
  * return 0.
@@ -1685,7 +1643,7 @@ static void scsi_kill_request(struct request *req, struct request_queue *q)
 	blk_complete_request(req);
 }
 
-void scsi_softirq_done(struct request *rq)
+static void scsi_softirq_done(struct request *rq)
 {
 	struct scsi_cmnd *cmd = blk_mq_rq_to_pdu(rq);
 	unsigned long wait_for = (cmd->allowed + 1) * rq->timeout;
@@ -1874,7 +1832,6 @@ static void scsi_request_fn(struct request_queue *q)
 		if (!(blk_queue_tagged(q) && !blk_queue_start_tag(q, req)))
 			blk_start_request(req);
 
-		preempt_disable();
 		spin_unlock_irq(q->queue_lock);
 		cmd = blk_mq_rq_to_pdu(req);
 		if (cmd != req->special) {
@@ -1899,20 +1856,15 @@ static void scsi_request_fn(struct request_queue *q)
 			if (list_empty(&sdev->starved_entry))
 				list_add_tail(&sdev->starved_entry,
 					      &shost->starved_list);
-			preempt_enable_no_resched();
 			spin_unlock_irq(shost->host_lock);
 			goto not_ready;
 		}
 
-		if (!scsi_target_queue_ready(shost, sdev)) {
-			preempt_enable_no_resched();
+		if (!scsi_target_queue_ready(shost, sdev))
 			goto not_ready;
-		}
 
-		if (!scsi_host_queue_ready(q, shost, sdev)) {
-			preempt_enable_no_resched();
+		if (!scsi_host_queue_ready(q, shost, sdev))
 			goto host_not_ready;
-		}
 	
 		if (sdev->simple_tags)
 			cmd->flags |= SCMD_TAGGED;
@@ -1930,7 +1882,6 @@ static void scsi_request_fn(struct request_queue *q)
 		 */
 		cmd->scsi_done = scsi_done;
 		rtn = scsi_dispatch_cmd(cmd);
-		preempt_enable_no_resched();
 		if (rtn) {
 			scsi_queue_insert(cmd, rtn);
 			spin_lock_irq(q->queue_lock);
@@ -2099,8 +2050,12 @@ out:
 			blk_mq_delay_run_hw_queue(hctx, SCSI_QUEUE_DELAY);
 		break;
 	default:
+		if (unlikely(!scsi_device_online(sdev)))
+			scsi_req(req)->result = DID_NO_CONNECT << 16;
+		else
+			scsi_req(req)->result = DID_ERROR << 16;
 		/*
-		 * Make sure to release all allocated ressources when
+		 * Make sure to release all allocated resources when
 		 * we hit an error, as we will never see this command
 		 * again.
 		 */
@@ -2291,7 +2246,6 @@ struct request_queue *scsi_old_alloc_queue(struct scsi_device *sdev)
 	blk_queue_softirq_done(q, scsi_softirq_done);
 	blk_queue_rq_timed_out(q, scsi_times_out);
 	blk_queue_lld_busy(q, scsi_lld_busy);
-
 	return q;
 }
 
@@ -2323,7 +2277,8 @@ int scsi_mq_setup_tags(struct Scsi_Host *shost)
 {
 	unsigned int cmd_size, sgl_size;
 
-	sgl_size = scsi_mq_sgl_size(shost);
+	sgl_size = max_t(unsigned int, sizeof(struct scatterlist),
+			scsi_mq_sgl_size(shost));
 	cmd_size = sizeof(struct scsi_cmnd) + shost->hostt->cmd_size + sgl_size;
 	if (scsi_host_get_prot(shost))
 		cmd_size += sizeof(struct scsi_data_buffer) + sgl_size;
